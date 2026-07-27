@@ -4,6 +4,7 @@ FrameX LeadFlow Backend API Test Suite
 Tests all backend endpoints with success and failure cases
 """
 
+import os
 import requests
 import json
 import base64
@@ -11,7 +12,7 @@ import io
 from datetime import datetime
 
 # Base URL from .env
-BASE_URL = "https://framex-houston.preview.emergentagent.com/api"
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:3000/api")
 
 # Test credentials
 ADMIN_EMAIL = "admin@framex.com"
