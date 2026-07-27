@@ -8,6 +8,9 @@ import { ensureSeed } from '@/lib/seed'
 
 export const runtime = 'nodejs'
 
+// Protected owner account — exempt from deletion by any other admin.
+const SUPER_ADMIN_EMAIL = (process.env.SUPER_ADMIN_EMAIL || 'favas@framexlgs.com').toLowerCase()
+
 let seeded = false
 async function ensureInit() {
   if (!seeded) {
@@ -136,38 +139,6 @@ async function handleRoute(request, { params }) {
       return json({ event: stripId(ev) })
     }
 
-    if (route === '/events/active' && method === 'PUT') {
-      const { user, error } = await requireAuth(request); if (error) return error
-      const adminErr = requireAdmin(user); if (adminErr) return adminErr
-      const body = await request.json()
-      const active = await db.collection('events').findOne({ active: true }) || await db.collection('events').findOne({})
-      if (!active) {
-        const doc = {
-          id: uuidv4(),
-          name: body.name || 'Houston Expo',
-          venue: body.venue || 'Houston, Texas',
-          start_date: body.start_date || new Date().toISOString().slice(0, 10),
-          end_date: body.end_date || body.start_date || new Date().toISOString().slice(0, 10),
-          booth_number: body.booth_number || 'To Be Confirmed',
-          active: true,
-          created_at: new Date(), updated_at: new Date(),
-        }
-        await db.collection('events').insertOne(doc)
-        return json({ event: stripId(doc) })
-      }
-      const upd = {
-        name: body.name ?? active.name,
-        venue: body.venue ?? active.venue,
-        start_date: body.start_date ?? active.start_date,
-        end_date: body.end_date ?? active.end_date,
-        booth_number: body.booth_number ?? active.booth_number,
-        updated_at: new Date(),
-      }
-      await db.collection('events').updateOne({ id: active.id }, { $set: upd })
-      const out = await db.collection('events').findOne({ id: active.id })
-      return json({ event: stripId(out) })
-    }
-
     if (route === '/events' && method === 'GET') {
       const { user, error } = await requireAuth(request); if (error) return error
       const adminErr = requireAdmin(user); if (adminErr) return adminErr
@@ -209,6 +180,26 @@ async function handleRoute(request, { params }) {
     }
 
     const eventMatch = route.match(/^\/events\/([^/]+)$/)
+    if (eventMatch && method === 'PUT') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const id = eventMatch[1]
+      const existing = await db.collection('events').findOne({ id })
+      if (!existing) return err('Event not found', 404)
+      const body = await request.json()
+      const upd = {
+        name: body.name ?? existing.name,
+        venue: body.venue ?? existing.venue,
+        start_date: body.start_date ?? existing.start_date,
+        end_date: body.end_date ?? existing.end_date,
+        booth_number: body.booth_number ?? existing.booth_number,
+        updated_at: new Date(),
+      }
+      await db.collection('events').updateOne({ id }, { $set: upd })
+      const out = await db.collection('events').findOne({ id })
+      return json({ event: stripId(out) })
+    }
+
     if (eventMatch && method === 'DELETE') {
       const { user, error } = await requireAuth(request); if (error) return error
       const adminErr = requireAdmin(user); if (adminErr) return adminErr
@@ -260,6 +251,7 @@ async function handleRoute(request, { params }) {
       if (id === user.id) return err('You cannot remove your own account')
       const target = await db.collection('profiles').findOne({ id })
       if (!target) return err('User not found', 404)
+      if (target.email === SUPER_ADMIN_EMAIL) return err('This account is protected and cannot be removed')
       if (target.role === 'admin') {
         const adminCount = await db.collection('profiles').countDocuments({ role: 'admin' })
         if (adminCount <= 1) return err('Cannot remove the last remaining admin')

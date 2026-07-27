@@ -12,11 +12,14 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 import { Separator } from '@/components/ui/separator'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Calendar } from '@/components/ui/calendar'
 import { Toaster, toast } from 'sonner'
+import { format, parseISO } from 'date-fns'
 import {
   Camera, Plus, LogOut, LayoutDashboard, Users, Download, Settings as SettingsIcon,
   CloudOff, ArrowLeft, Phone, Mail, Globe, Archive, Search, Menu, Loader2,
-  AlertTriangle, RefreshCw, Upload, Building2, Trash2,
+  AlertTriangle, RefreshCw, Upload, Building2, Trash2, Calendar as CalendarIcon, Pencil,
 } from 'lucide-react'
 
 // ============================================================
@@ -973,35 +976,27 @@ function ExportView({ user }) {
 // SETTINGS
 // ============================================================
 function SettingsView({ user }) {
-  const [event, setEvent] = useState(null)
-  const [saving, setSaving] = useState(false)
-  useEffect(() => { (async () => { const { event } = await api('/events/active'); setEvent(event) })() }, [])
-  async function save() {
-    setSaving(true)
-    try {
-      const { event: e } = await api('/events/active', { method: 'PUT', body: JSON.stringify(event) })
-      setEvent(e); toast.success('Event saved')
-    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
-  }
-  if (!event) return <div className="text-slate-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
   const canEdit = user.role === 'admin'
+  const [event, setEvent] = useState(null)
+  useEffect(() => { if (!canEdit) { (async () => { const { event } = await api('/events/active'); setEvent(event) })() } }, [canEdit])
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Settings</h2>
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Active Expo Event</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <Field label="Event Name"><Input value={event.name || ''} onChange={(e) => setEvent({ ...event, name: e.target.value })} disabled={!canEdit} /></Field>
-          <Field label="Venue"><Input value={event.venue || ''} onChange={(e) => setEvent({ ...event, venue: e.target.value })} disabled={!canEdit} /></Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Start Date"><Input type="date" value={event.start_date || ''} onChange={(e) => setEvent({ ...event, start_date: e.target.value })} disabled={!canEdit} /></Field>
-            <Field label="End Date"><Input type="date" value={event.end_date || ''} onChange={(e) => setEvent({ ...event, end_date: e.target.value })} disabled={!canEdit} /></Field>
-          </div>
-          <Field label="Booth Number"><Input value={event.booth_number || ''} onChange={(e) => setEvent({ ...event, booth_number: e.target.value })} disabled={!canEdit} /></Field>
-          {canEdit && <Button onClick={save} disabled={saving} className="bg-slate-900 hover:bg-slate-800">{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}</Button>}
-        </CardContent>
-      </Card>
-      {canEdit && <EventsManager activeEventId={event.id} onActivated={setEvent} />}
+      {canEdit ? <EventsManager /> : (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-base">Active Expo Event</CardTitle></CardHeader>
+          <CardContent className="text-sm text-slate-600 space-y-1">
+            {!event ? <div className="text-slate-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div> : (
+              <>
+                <div className="font-medium text-base text-slate-900">{event.name}</div>
+                <div>{event.venue}</div>
+                <div>{formatEventDates(event)}</div>
+                <div>Booth {event.booth_number}</div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
       {canEdit && <StaffManager currentUserId={user.id} />}
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">About</CardTitle></CardHeader>
@@ -1024,10 +1019,45 @@ function formatEventDates(ev) {
   return `${start} – ${end}`
 }
 
-function EventsManager({ activeEventId, onActivated }) {
+function DateRangeField({ startDate, endDate, onChange, disabled }) {
+  const range = {
+    from: startDate ? parseISO(startDate) : undefined,
+    to: endDate ? parseISO(endDate) : undefined,
+  }
+  function handleSelect(r) {
+    onChange({
+      start_date: r?.from ? format(r.from, 'yyyy-MM-dd') : '',
+      end_date: r?.to ? format(r.to, 'yyyy-MM-dd') : (r?.from ? format(r.from, 'yyyy-MM-dd') : ''),
+    })
+  }
+  const label = startDate
+    ? (endDate && endDate !== startDate
+        ? `${format(parseISO(startDate), 'MMM d, yyyy')} – ${format(parseISO(endDate), 'MMM d, yyyy')}`
+        : format(parseISO(startDate), 'MMM d, yyyy'))
+    : 'Pick dates'
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" disabled={disabled} className="w-full justify-start font-normal">
+          <CalendarIcon className="w-4 h-4 mr-2" />{label}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar mode="range" selected={range} onSelect={handleSelect} numberOfMonths={1} />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const EMPTY_EVENT_FORM = { name: '', venue: '', start_date: '', end_date: '', booth_number: '' }
+
+function EventsManager() {
   const [events, setEvents] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ name: '', venue: '', start_date: '', end_date: '', booth_number: '' })
+  const [form, setForm] = useState(EMPTY_EVENT_FORM)
+  const [editing, setEditing] = useState(null) // event being edited, or null
+  const [editForm, setEditForm] = useState(EMPTY_EVENT_FORM)
+  const [savingEdit, setSavingEdit] = useState(false)
 
   async function load() { const { events } = await api('/events'); setEvents(events) }
   useEffect(() => { load() }, [])
@@ -1037,7 +1067,7 @@ function EventsManager({ activeEventId, onActivated }) {
     setCreating(true)
     try {
       await api('/events', { method: 'POST', body: JSON.stringify(form) })
-      setForm({ name: '', venue: '', start_date: '', end_date: '', booth_number: '' })
+      setForm(EMPTY_EVENT_FORM)
       toast.success('Event created')
       await load()
     } catch (e) { toast.error(e.message) } finally { setCreating(false) }
@@ -1047,7 +1077,6 @@ function EventsManager({ activeEventId, onActivated }) {
     try {
       const { event } = await api(`/events/${id}/activate`, { method: 'POST' })
       toast.success(`"${event.name}" is now active`)
-      onActivated?.(event)
       await load()
     } catch (e) { toast.error(e.message) }
   }
@@ -1061,6 +1090,22 @@ function EventsManager({ activeEventId, onActivated }) {
     } catch (e) { toast.error(e.message) }
   }
 
+  function openEdit(ev) {
+    setEditing(ev)
+    setEditForm({ name: ev.name || '', venue: ev.venue || '', start_date: ev.start_date || '', end_date: ev.end_date || '', booth_number: ev.booth_number || '' })
+  }
+
+  async function saveEdit() {
+    if (!editForm.name.trim()) { toast.error('Event name required'); return }
+    setSavingEdit(true)
+    try {
+      await api(`/events/${editing.id}`, { method: 'PUT', body: JSON.stringify(editForm) })
+      toast.success('Event updated')
+      setEditing(null)
+      await load()
+    } catch (e) { toast.error(e.message) } finally { setSavingEdit(false) }
+  }
+
   return (
     <Card>
       <CardHeader className="pb-2"><CardTitle className="text-base">All Events</CardTitle></CardHeader>
@@ -1071,16 +1116,15 @@ function EventsManager({ activeEventId, onActivated }) {
             <div>
               <div className="font-medium flex items-center gap-2">
                 {ev.name}
-                {ev.id === activeEventId && <Badge className="bg-green-500 hover:bg-green-500">Active</Badge>}
+                {ev.active && <Badge className="bg-green-500 hover:bg-green-500">Active</Badge>}
               </div>
               <div className="text-xs text-slate-500">{ev.venue}{formatEventDates(ev) ? ` · ${formatEventDates(ev)}` : ''}</div>
             </div>
-            {ev.id !== activeEventId && (
-              <div className="flex items-center gap-1">
-                <Button size="sm" variant="outline" onClick={() => activate(ev.id)}>Set Active</Button>
-                <Button size="icon" variant="ghost" onClick={() => remove(ev.id, ev.name)}><Trash2 className="w-4 h-4 text-red-500" /></Button>
-              </div>
-            )}
+            <div className="flex items-center gap-1">
+              <Button size="icon" variant="ghost" onClick={() => openEdit(ev)}><Pencil className="w-4 h-4" /></Button>
+              {!ev.active && <Button size="sm" variant="outline" onClick={() => activate(ev.id)}>Set Active</Button>}
+              {!ev.active && <Button size="icon" variant="ghost" onClick={() => remove(ev.id, ev.name)}><Trash2 className="w-4 h-4 text-red-500" /></Button>}
+            </div>
           </div>
         ))}
         <Separator />
@@ -1089,8 +1133,15 @@ function EventsManager({ activeEventId, onActivated }) {
           <div className="grid grid-cols-2 gap-2">
             <Input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <Input placeholder="Venue" value={form.venue} onChange={(e) => setForm({ ...form, venue: e.target.value })} />
-            <Field label="Start Date"><Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></Field>
-            <Field label="End Date"><Input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></Field>
+            <div className="col-span-2">
+              <Field label="Event Dates">
+                <DateRangeField
+                  startDate={form.start_date}
+                  endDate={form.end_date}
+                  onChange={({ start_date, end_date }) => setForm({ ...form, start_date, end_date })}
+                />
+              </Field>
+            </div>
             <Input placeholder="Booth Number" value={form.booth_number} onChange={(e) => setForm({ ...form, booth_number: e.target.value })} className="col-span-2" />
           </div>
           <Button onClick={create} disabled={creating} className="bg-slate-900 hover:bg-slate-800">
@@ -1098,9 +1149,36 @@ function EventsManager({ activeEventId, onActivated }) {
           </Button>
         </div>
       </CardContent>
+
+      <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit Event</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <Field label="Event Name"><Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></Field>
+            <Field label="Venue"><Input value={editForm.venue} onChange={(e) => setEditForm({ ...editForm, venue: e.target.value })} /></Field>
+            <Field label="Event Dates">
+              <DateRangeField
+                startDate={editForm.start_date}
+                endDate={editForm.end_date}
+                onChange={({ start_date, end_date }) => setEditForm({ ...editForm, start_date, end_date })}
+              />
+            </Field>
+            <Field label="Booth Number"><Input value={editForm.booth_number} onChange={(e) => setEditForm({ ...editForm, booth_number: e.target.value })} /></Field>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button onClick={saveEdit} disabled={savingEdit} className="bg-slate-900 hover:bg-slate-800">
+              {savingEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }
+
+// Protected owner account — mirrors the backend guard in app/api/[[...path]]/route.js
+const SUPER_ADMIN_EMAIL = 'favas@framexlgs.com'
 
 // ============================================================
 // STAFF MANAGER (admin)
@@ -1145,12 +1223,14 @@ function StaffManager({ currentUserId }) {
             <div>
               <div className="font-medium flex items-center gap-2">
                 {u.full_name}
-                <Badge variant="outline">{u.role}</Badge>
+                {u.email === SUPER_ADMIN_EMAIL
+                  ? <Badge className="bg-amber-500 hover:bg-amber-500">Super Admin</Badge>
+                  : <Badge variant="outline">{u.role}</Badge>}
                 {u.id === currentUserId && <span className="text-xs text-slate-400">(you)</span>}
               </div>
               <div className="text-xs text-slate-500">{u.email}</div>
             </div>
-            {u.id !== currentUserId && (
+            {u.id !== currentUserId && u.email !== SUPER_ADMIN_EMAIL && (
               <Button size="icon" variant="ghost" onClick={() => remove(u.id)}><Trash2 className="w-4 h-4 text-red-500" /></Button>
             )}
           </div>
