@@ -146,7 +146,8 @@ async function handleRoute(request, { params }) {
           id: uuidv4(),
           name: body.name || 'Houston Expo',
           venue: body.venue || 'Houston, Texas',
-          event_date: body.event_date || new Date().toISOString().slice(0, 10),
+          start_date: body.start_date || new Date().toISOString().slice(0, 10),
+          end_date: body.end_date || body.start_date || new Date().toISOString().slice(0, 10),
           booth_number: body.booth_number || 'To Be Confirmed',
           active: true,
           created_at: new Date(), updated_at: new Date(),
@@ -157,7 +158,8 @@ async function handleRoute(request, { params }) {
       const upd = {
         name: body.name ?? active.name,
         venue: body.venue ?? active.venue,
-        event_date: body.event_date ?? active.event_date,
+        start_date: body.start_date ?? active.start_date,
+        end_date: body.end_date ?? active.end_date,
         booth_number: body.booth_number ?? active.booth_number,
         updated_at: new Date(),
       }
@@ -183,7 +185,8 @@ async function handleRoute(request, { params }) {
         id: uuidv4(),
         name: body.name,
         venue: body.venue || '',
-        event_date: body.event_date || new Date().toISOString().slice(0, 10),
+        start_date: body.start_date || new Date().toISOString().slice(0, 10),
+        end_date: body.end_date || body.start_date || new Date().toISOString().slice(0, 10),
         booth_number: body.booth_number || '',
         active: !hasActive,
         created_at: new Date(), updated_at: new Date(),
@@ -203,6 +206,18 @@ async function handleRoute(request, { params }) {
       await db.collection('events').updateOne({ id }, { $set: { active: true, updated_at: new Date() } })
       const out = await db.collection('events').findOne({ id })
       return json({ event: stripId(out) })
+    }
+
+    const eventMatch = route.match(/^\/events\/([^/]+)$/)
+    if (eventMatch && method === 'DELETE') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const id = eventMatch[1]
+      const target = await db.collection('events').findOne({ id })
+      if (!target) return err('Event not found', 404)
+      if (target.active) return err('Cannot delete the active event — set another event active first')
+      await db.collection('events').deleteOne({ id })
+      return json({ ok: true })
     }
 
     // ---------- Users (admin) ----------

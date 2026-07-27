@@ -1,5 +1,5 @@
 // FrameX LeadFlow service worker  --  minimal offline shell cache
-const CACHE = 'framex-leadflow-v2'
+const CACHE = 'framex-leadflow-v3'
 const SHELL = ['/', '/manifest.json']
 
 self.addEventListener('install', (e) => {

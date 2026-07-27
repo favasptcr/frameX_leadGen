@@ -993,7 +993,10 @@ function SettingsView({ user }) {
         <CardContent className="space-y-3">
           <Field label="Event Name"><Input value={event.name || ''} onChange={(e) => setEvent({ ...event, name: e.target.value })} disabled={!canEdit} /></Field>
           <Field label="Venue"><Input value={event.venue || ''} onChange={(e) => setEvent({ ...event, venue: e.target.value })} disabled={!canEdit} /></Field>
-          <Field label="Event Date"><Input type="date" value={event.event_date || ''} onChange={(e) => setEvent({ ...event, event_date: e.target.value })} disabled={!canEdit} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Start Date"><Input type="date" value={event.start_date || ''} onChange={(e) => setEvent({ ...event, start_date: e.target.value })} disabled={!canEdit} /></Field>
+            <Field label="End Date"><Input type="date" value={event.end_date || ''} onChange={(e) => setEvent({ ...event, end_date: e.target.value })} disabled={!canEdit} /></Field>
+          </div>
           <Field label="Booth Number"><Input value={event.booth_number || ''} onChange={(e) => setEvent({ ...event, booth_number: e.target.value })} disabled={!canEdit} /></Field>
           {canEdit && <Button onClick={save} disabled={saving} className="bg-slate-900 hover:bg-slate-800">{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}</Button>}
         </CardContent>
@@ -1013,10 +1016,18 @@ function SettingsView({ user }) {
 // ============================================================
 // EVENTS MANAGER (admin)
 // ============================================================
+function formatEventDates(ev) {
+  const start = ev.start_date || ev.event_date || ''
+  const end = ev.end_date || ev.event_date || ''
+  if (!start && !end) return ''
+  if (!end || start === end) return start
+  return `${start} – ${end}`
+}
+
 function EventsManager({ activeEventId, onActivated }) {
   const [events, setEvents] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ name: '', venue: '', event_date: '', booth_number: '' })
+  const [form, setForm] = useState({ name: '', venue: '', start_date: '', end_date: '', booth_number: '' })
 
   async function load() { const { events } = await api('/events'); setEvents(events) }
   useEffect(() => { load() }, [])
@@ -1026,7 +1037,7 @@ function EventsManager({ activeEventId, onActivated }) {
     setCreating(true)
     try {
       await api('/events', { method: 'POST', body: JSON.stringify(form) })
-      setForm({ name: '', venue: '', event_date: '', booth_number: '' })
+      setForm({ name: '', venue: '', start_date: '', end_date: '', booth_number: '' })
       toast.success('Event created')
       await load()
     } catch (e) { toast.error(e.message) } finally { setCreating(false) }
@@ -1037,6 +1048,15 @@ function EventsManager({ activeEventId, onActivated }) {
       const { event } = await api(`/events/${id}/activate`, { method: 'POST' })
       toast.success(`"${event.name}" is now active`)
       onActivated?.(event)
+      await load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  async function remove(id, name) {
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return
+    try {
+      await api(`/events/${id}`, { method: 'DELETE' })
+      toast.success('Event deleted')
       await load()
     } catch (e) { toast.error(e.message) }
   }
@@ -1053,10 +1073,13 @@ function EventsManager({ activeEventId, onActivated }) {
                 {ev.name}
                 {ev.id === activeEventId && <Badge className="bg-green-500 hover:bg-green-500">Active</Badge>}
               </div>
-              <div className="text-xs text-slate-500">{ev.venue}{ev.event_date ? ` · ${ev.event_date}` : ''}</div>
+              <div className="text-xs text-slate-500">{ev.venue}{formatEventDates(ev) ? ` · ${formatEventDates(ev)}` : ''}</div>
             </div>
             {ev.id !== activeEventId && (
-              <Button size="sm" variant="outline" onClick={() => activate(ev.id)}>Set Active</Button>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="outline" onClick={() => activate(ev.id)}>Set Active</Button>
+                <Button size="icon" variant="ghost" onClick={() => remove(ev.id, ev.name)}><Trash2 className="w-4 h-4 text-red-500" /></Button>
+              </div>
             )}
           </div>
         ))}
@@ -1066,8 +1089,9 @@ function EventsManager({ activeEventId, onActivated }) {
           <div className="grid grid-cols-2 gap-2">
             <Input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <Input placeholder="Venue" value={form.venue} onChange={(e) => setForm({ ...form, venue: e.target.value })} />
-            <Input type="date" value={form.event_date} onChange={(e) => setForm({ ...form, event_date: e.target.value })} />
-            <Input placeholder="Booth Number" value={form.booth_number} onChange={(e) => setForm({ ...form, booth_number: e.target.value })} />
+            <Field label="Start Date"><Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></Field>
+            <Field label="End Date"><Input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></Field>
+            <Input placeholder="Booth Number" value={form.booth_number} onChange={(e) => setForm({ ...form, booth_number: e.target.value })} className="col-span-2" />
           </div>
           <Button onClick={create} disabled={creating} className="bg-slate-900 hover:bg-slate-800">
             {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4 mr-1" />Create Event</>}

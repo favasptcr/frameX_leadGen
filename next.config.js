@@ -35,6 +35,15 @@ const nextConfig = {
           { key: "Access-Control-Allow-Headers", value: "*" },
         ],
       },
+      {
+        // Browsers detect service worker updates by re-fetching this file and
+        // comparing bytes. If it's cacheable, Vercel's CDN can keep serving a
+        // stale copy indefinitely and the PWA never sees new deploys.
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+        ],
+      },
     ];
   },
 };
