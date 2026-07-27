@@ -15,7 +15,7 @@ import { Separator } from '@/components/ui/separator'
 import { Toaster, toast } from 'sonner'
 import {
   Camera, Plus, LogOut, LayoutDashboard, Users, Download, Settings as SettingsIcon,
-  CloudOff, ArrowLeft, Phone, Mail, Globe, Archive, Search, Menu, Loader2, CheckCircle2,
+  CloudOff, ArrowLeft, Phone, Mail, Globe, Archive, Search, Menu, Loader2,
   AlertTriangle, RefreshCw, Upload, Building2, Trash2,
 } from 'lucide-react'
 
@@ -474,9 +474,6 @@ function ScanView({ setView, user, refreshPending, online }) {
                   {processing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing…</> : <><Upload className="w-4 h-4 mr-2" />Process</>}
                 </Button>
               </div>
-              <div className="text-xs text-slate-500">
-                OCR is currently a MOCK service. Fields will be pre-filled with sample data for review. Configure a real provider via <code>OCR_PROVIDER</code> in <code>.env</code>.
-              </div>
             </div>
           )}
         </CardContent>
@@ -498,9 +495,9 @@ function ManualView({ setView, user, refreshPending, online, initial = {}, cardI
         cardImage={cardImage}
         ocrRaw={ocrRaw}
         online={online}
-        onSaved={(lead, offline) => {
+        onSaved={() => {
           refreshPending()
-          setView({ name: 'saved', lead, offline })
+          setView({ name: 'dashboard' })
         }}
         onSavedFallback={setView}
       />
@@ -527,7 +524,6 @@ function LeadForm({ initial = {}, cardImage, ocrRaw = '', online, onSaved, editi
   const [saving, setSaving] = useState(false)
   const [dupOpen, setDupOpen] = useState(false)
   const [dupList, setDupList] = useState([])
-  const [savedLead, setSavedLead] = useState(null)
 
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })) }
   function toggleInterest(v) {
@@ -565,7 +561,7 @@ function LeadForm({ initial = {}, cardImage, ocrRaw = '', online, onSaved, editi
       } else if (online) {
         const { lead } = await api('/leads', { method: 'POST', body: JSON.stringify(payload) })
         setSaving(false)
-        setSavedLead(lead)
+        toast.success('Lead saved')
         onSaved?.(lead, false)
       } else {
         // Offline: queue in IndexedDB
@@ -579,8 +575,6 @@ function LeadForm({ initial = {}, cardImage, ocrRaw = '', online, onSaved, editi
       }
     } catch (e) { setSaving(false); toast.error(e.message) }
   }
-
-  if (savedLead && !editingLead) return <SavedScreen lead={savedLead} onNext={() => location.reload()} />
 
   return (
     <div className="space-y-4">
@@ -720,28 +714,6 @@ function LeadForm({ initial = {}, cardImage, ocrRaw = '', online, onSaved, editi
 
 function Field({ label, children }) {
   return (<div><Label className="text-xs uppercase tracking-wider text-slate-500">{label}</Label><div className="mt-1">{children}</div></div>)
-}
-
-function SavedScreen({ lead, onNext }) {
-  return (
-    <div className="min-h-[60vh] grid place-items-center">
-      <div className="text-center space-y-4">
-        <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
-        <div>
-          <div className="text-2xl font-bold">Lead Saved Successfully</div>
-          <div className="text-slate-500 mt-1">{lead.full_name || lead.email || 'New lead'} — {lead.company || '—'}</div>
-        </div>
-        <div className="grid grid-cols-1 gap-3 max-w-xs mx-auto">
-          <Button onClick={onNext} className="h-14 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold text-lg">
-            <Camera className="w-5 h-5 mr-2" /> Scan Next Card
-          </Button>
-          <Button variant="outline" onClick={() => { window.dispatchEvent(new CustomEvent('open_lead', { detail: lead.id })) }}>
-            View Lead
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 // ============================================================
@@ -1026,15 +998,160 @@ function SettingsView({ user }) {
           {canEdit && <Button onClick={save} disabled={saving} className="bg-slate-900 hover:bg-slate-800">{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}</Button>}
         </CardContent>
       </Card>
+      {canEdit && <EventsManager activeEventId={event.id} onActivated={setEvent} />}
+      {canEdit && <StaffManager currentUserId={user.id} />}
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">About</CardTitle></CardHeader>
         <CardContent className="text-sm text-slate-600 space-y-1">
           <div>User: {user.full_name} ({user.role})</div>
-          <div>OCR provider: <code className="bg-slate-100 px-1 rounded">{process.env.NEXT_PUBLIC_OCR_PROVIDER || 'mock'}</code></div>
-          <div className="text-xs text-slate-500 mt-2">To use a real OCR provider, edit <code>OCR_PROVIDER</code> in <code>.env</code> and implement the SDK call inside <code>/app/lib/ocr.js</code>.</div>
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+// ============================================================
+// EVENTS MANAGER (admin)
+// ============================================================
+function EventsManager({ activeEventId, onActivated }) {
+  const [events, setEvents] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [form, setForm] = useState({ name: '', venue: '', event_date: '', booth_number: '' })
+
+  async function load() { const { events } = await api('/events'); setEvents(events) }
+  useEffect(() => { load() }, [])
+
+  async function create() {
+    if (!form.name.trim()) { toast.error('Event name required'); return }
+    setCreating(true)
+    try {
+      await api('/events', { method: 'POST', body: JSON.stringify(form) })
+      setForm({ name: '', venue: '', event_date: '', booth_number: '' })
+      toast.success('Event created')
+      await load()
+    } catch (e) { toast.error(e.message) } finally { setCreating(false) }
+  }
+
+  async function activate(id) {
+    try {
+      const { event } = await api(`/events/${id}/activate`, { method: 'POST' })
+      toast.success(`"${event.name}" is now active`)
+      onActivated?.(event)
+      await load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="text-base">All Events</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        {!events && <div className="text-sm text-slate-400">Loading…</div>}
+        {events?.map((ev) => (
+          <div key={ev.id} className="flex items-center justify-between border border-slate-200 rounded-lg p-3">
+            <div>
+              <div className="font-medium flex items-center gap-2">
+                {ev.name}
+                {ev.id === activeEventId && <Badge className="bg-green-500 hover:bg-green-500">Active</Badge>}
+              </div>
+              <div className="text-xs text-slate-500">{ev.venue}{ev.event_date ? ` · ${ev.event_date}` : ''}</div>
+            </div>
+            {ev.id !== activeEventId && (
+              <Button size="sm" variant="outline" onClick={() => activate(ev.id)}>Set Active</Button>
+            )}
+          </div>
+        ))}
+        <Separator />
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Create Event</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <Input placeholder="Venue" value={form.venue} onChange={(e) => setForm({ ...form, venue: e.target.value })} />
+            <Input type="date" value={form.event_date} onChange={(e) => setForm({ ...form, event_date: e.target.value })} />
+            <Input placeholder="Booth Number" value={form.booth_number} onChange={(e) => setForm({ ...form, booth_number: e.target.value })} />
+          </div>
+          <Button onClick={create} disabled={creating} className="bg-slate-900 hover:bg-slate-800">
+            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4 mr-1" />Create Event</>}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ============================================================
+// STAFF MANAGER (admin)
+// ============================================================
+function StaffManager({ currentUserId }) {
+  const [users, setUsers] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [form, setForm] = useState({ full_name: '', email: '', password: '', role: 'staff' })
+
+  async function load() { const { users } = await api('/users'); setUsers(users) }
+  useEffect(() => { load() }, [])
+
+  async function create() {
+    if (!form.full_name.trim() || !form.email.trim() || form.password.length < 6) {
+      toast.error('Name, email, and a password of at least 6 characters are required'); return
+    }
+    setCreating(true)
+    try {
+      await api('/users', { method: 'POST', body: JSON.stringify(form) })
+      setForm({ full_name: '', email: '', password: '', role: 'staff' })
+      toast.success('User created')
+      await load()
+    } catch (e) { toast.error(e.message) } finally { setCreating(false) }
+  }
+
+  async function remove(id) {
+    if (!confirm('Remove this user? They will no longer be able to sign in.')) return
+    try {
+      await api(`/users/${id}`, { method: 'DELETE' })
+      toast.success('User removed')
+      await load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="text-base">Staff & Admin Accounts</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        {!users && <div className="text-sm text-slate-400">Loading…</div>}
+        {users?.map((u) => (
+          <div key={u.id} className="flex items-center justify-between border border-slate-200 rounded-lg p-3">
+            <div>
+              <div className="font-medium flex items-center gap-2">
+                {u.full_name}
+                <Badge variant="outline">{u.role}</Badge>
+                {u.id === currentUserId && <span className="text-xs text-slate-400">(you)</span>}
+              </div>
+              <div className="text-xs text-slate-500">{u.email}</div>
+            </div>
+            {u.id !== currentUserId && (
+              <Button size="icon" variant="ghost" onClick={() => remove(u.id)}><Trash2 className="w-4 h-4 text-red-500" /></Button>
+            )}
+          </div>
+        ))}
+        <Separator />
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Add User</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Input placeholder="Full Name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+            <Input type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            <Input type="password" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="staff">Staff</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Button onClick={create} disabled={creating} className="bg-slate-900 hover:bg-slate-800">
+            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4 mr-1" />Add User</>}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 

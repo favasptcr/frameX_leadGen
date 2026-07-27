@@ -166,6 +166,93 @@ async function handleRoute(request, { params }) {
       return json({ event: stripId(out) })
     }
 
+    if (route === '/events' && method === 'GET') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const events = await db.collection('events').find({}).sort({ created_at: -1 }).toArray()
+      return json({ events: events.map(stripId) })
+    }
+
+    if (route === '/events' && method === 'POST') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const body = await request.json()
+      if (!body.name) return err('Event name required')
+      const hasActive = await db.collection('events').findOne({ active: true })
+      const doc = {
+        id: uuidv4(),
+        name: body.name,
+        venue: body.venue || '',
+        event_date: body.event_date || new Date().toISOString().slice(0, 10),
+        booth_number: body.booth_number || '',
+        active: !hasActive,
+        created_at: new Date(), updated_at: new Date(),
+      }
+      await db.collection('events').insertOne(doc)
+      return json({ event: stripId(doc) })
+    }
+
+    const eventActivateMatch = route.match(/^\/events\/([^/]+)\/activate$/)
+    if (eventActivateMatch && method === 'POST') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const id = eventActivateMatch[1]
+      const target = await db.collection('events').findOne({ id })
+      if (!target) return err('Event not found', 404)
+      await db.collection('events').updateMany({}, { $set: { active: false } })
+      await db.collection('events').updateOne({ id }, { $set: { active: true, updated_at: new Date() } })
+      const out = await db.collection('events').findOne({ id })
+      return json({ event: stripId(out) })
+    }
+
+    // ---------- Users (admin) ----------
+    if (route === '/users' && method === 'GET') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const users = await db.collection('profiles').find({}).sort({ created_at: -1 }).toArray()
+      return json({ users: users.map(stripId) })
+    }
+
+    if (route === '/users' && method === 'POST') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const body = await request.json()
+      const email = String(body.email || '').trim().toLowerCase()
+      const fullName = String(body.full_name || '').trim()
+      const password = String(body.password || '')
+      const role = body.role === 'admin' ? 'admin' : 'staff'
+      if (!email || !fullName) return err('Full name and email required')
+      if (password.length < 6) return err('Password must be at least 6 characters')
+      const existing = await db.collection('profiles').findOne({ email })
+      if (existing) return err('A user with this email already exists', 409)
+      const doc = {
+        id: uuidv4(),
+        full_name: fullName,
+        email,
+        password_hash: hashPassword(password),
+        role,
+        created_at: new Date(),
+      }
+      await db.collection('profiles').insertOne(doc)
+      return json({ user: stripId(doc) })
+    }
+
+    const userMatch = route.match(/^\/users\/([^/]+)$/)
+    if (userMatch && method === 'DELETE') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const adminErr = requireAdmin(user); if (adminErr) return adminErr
+      const id = userMatch[1]
+      if (id === user.id) return err('You cannot remove your own account')
+      const target = await db.collection('profiles').findOne({ id })
+      if (!target) return err('User not found', 404)
+      if (target.role === 'admin') {
+        const adminCount = await db.collection('profiles').countDocuments({ role: 'admin' })
+        if (adminCount <= 1) return err('Cannot remove the last remaining admin')
+      }
+      await db.collection('profiles').deleteOne({ id })
+      return json({ ok: true })
+    }
+
     // ---------- Duplicate check ----------
     if (route === '/leads/duplicates' && method === 'GET') {
       const { user, error } = await requireAuth(request); if (error) return error
