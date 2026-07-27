@@ -190,7 +190,7 @@ function TopBar({ user, view, setView, pendingCount, online, onLogout }) {
     <header className="sticky top-0 z-30 bg-white border-b border-slate-200">
       <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView({ name: 'dashboard' })}>
-          <img src="/icons/icon.svg" alt="FrameX" className="w-8 h-8 rounded" />
+          <img src="/icons/logo-mark.png" alt="FrameX" className="w-8 h-8 rounded" />
           <div>
             <div className="font-bold text-slate-900 leading-none">FrameX</div>
             <div className="text-[10px] uppercase tracking-widest text-slate-500 leading-none mt-0.5">LeadFlow</div>
@@ -263,7 +263,7 @@ function LoginView({ onLogin }) {
     <div className="min-h-screen bg-slate-50 grid place-items-center px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
-          <img src="/icons/icon.svg" alt="FrameX" className="w-16 h-16 rounded-xl mb-3" />
+          <img src="/icons/logo-mark.png" alt="FrameX" className="w-16 h-16 rounded-xl mb-3" />
           <h1 className="text-2xl font-bold text-slate-900">FrameX LeadFlow</h1>
           <p className="text-sm text-slate-500 mt-1">Lead capture for Houston Expo</p>
         </div>
