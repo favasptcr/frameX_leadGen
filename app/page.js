@@ -464,7 +464,7 @@ function ScanView({ setView, user, refreshPending, online }) {
               </div>
             </button>
           )}
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" />
+          <input ref={fileRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
           {preview && (
             <div className="space-y-3">
               <img src={preview} alt="Card preview" className="w-full rounded-lg border border-slate-200" />
