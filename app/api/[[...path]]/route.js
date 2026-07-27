@@ -46,6 +46,18 @@ function requireAdmin(user) {
   return null
 }
 
+// Leads captured under an event marked is_test are hidden from everyone
+// except the super admin, so demo/test data never mixes into real reporting.
+async function hiddenEventIds(db, user) {
+  if (user.email === SUPER_ADMIN_EMAIL) return []
+  const testEvents = await db.collection('events').find({ is_test: true }).project({ id: 1 }).toArray()
+  return testEvents.map((e) => e.id)
+}
+function applyHiddenEvents(q, ids) {
+  if (ids.length > 0) q.event_id = { $nin: ids }
+  return q
+}
+
 function csvEscape(v) {
   if (v === null || v === undefined) return ''
   const s = String(v).replace(/"/g, '""')
@@ -146,6 +158,15 @@ async function handleRoute(request, { params }) {
       return json({ events: events.map(stripId) })
     }
 
+    // Lightweight, non-admin-gated event list for the leads filter dropdown.
+    // Test/demo events are omitted for everyone except the super admin.
+    if (route === '/events/list' && method === 'GET') {
+      const { user, error } = await requireAuth(request); if (error) return error
+      const q = user.email === SUPER_ADMIN_EMAIL ? {} : { is_test: { $ne: true } }
+      const events = await db.collection('events').find(q).sort({ created_at: -1 }).toArray()
+      return json({ events: events.map(stripId) })
+    }
+
     if (route === '/events' && method === 'POST') {
       const { user, error } = await requireAuth(request); if (error) return error
       const adminErr = requireAdmin(user); if (adminErr) return adminErr
@@ -160,6 +181,7 @@ async function handleRoute(request, { params }) {
         end_date: body.end_date || body.start_date || new Date().toISOString().slice(0, 10),
         booth_number: body.booth_number || '',
         active: !hasActive,
+        is_test: !!body.is_test,
         created_at: new Date(), updated_at: new Date(),
       }
       await db.collection('events').insertOne(doc)
@@ -193,6 +215,7 @@ async function handleRoute(request, { params }) {
         start_date: body.start_date ?? existing.start_date,
         end_date: body.end_date ?? existing.end_date,
         booth_number: body.booth_number ?? existing.booth_number,
+        is_test: body.is_test ?? existing.is_test ?? false,
         updated_at: new Date(),
       }
       await db.collection('events').updateOne({ id }, { $set: upd })
@@ -275,7 +298,7 @@ async function handleRoute(request, { params }) {
         or.push({ mobile_phone: { $regex: suffix.split('').join('.?') } })
       }
       if (or.length === 0) return json({ duplicates: [] })
-      const q = { $or: or, archived_at: null }
+      const q = applyHiddenEvents({ $or: or, archived_at: null }, await hiddenEventIds(db, user))
       if (excludeId) q.id = { $ne: excludeId }
       const dups = await db.collection('leads').find(q).limit(5).toArray()
       return json({ duplicates: dups.map(stripId) })
@@ -287,14 +310,19 @@ async function handleRoute(request, { params }) {
       const adminErr = requireAdmin(user); if (adminErr) return adminErr
       const url = new URL(request.url)
       const scope = url.searchParams.get('scope') || 'all'
+      const hiddenIds = await hiddenEventIds(db, user)
       const q = { archived_at: null }
       if (scope === 'event') {
         const ev = await db.collection('events').findOne({ active: true })
-        if (ev) q.event_id = ev.id
+        // If the active event is itself test/demo and the requester can't see hidden
+        // events, treat it as if there's no active event to export from.
+        q.event_id = ev && !hiddenIds.includes(ev.id) ? ev.id : '__none__'
       } else if (scope === 'hot') {
         q.priority = 'Hot'
+        applyHiddenEvents(q, hiddenIds)
       } else if (scope === 'follow_up') {
         q.follow_up_required = true
+        applyHiddenEvents(q, hiddenIds)
       } else if (scope === 'filtered') {
         // parse extra filters
         const search = url.searchParams.get('search') || ''
@@ -312,6 +340,9 @@ async function handleRoute(request, { params }) {
             { mobile_phone: { $regex: search } },
           ]
         }
+        applyHiddenEvents(q, hiddenIds)
+      } else {
+        applyHiddenEvents(q, hiddenIds)
       }
       const leads = await db.collection('leads').find(q).sort({ created_at: -1 }).toArray()
       const csv = leadsToCsv(leads.map(stripId))
@@ -333,6 +364,7 @@ async function handleRoute(request, { params }) {
       const priority = url.searchParams.get('priority') || ''
       const status = url.searchParams.get('status') || ''
       const followUp = url.searchParams.get('follow_up') || ''
+      const eventId = url.searchParams.get('event_id') || ''
       const sort = url.searchParams.get('sort') || 'newest'
       const showArchived = url.searchParams.get('archived') === '1'
       const q = showArchived ? { archived_at: { $ne: null } } : { archived_at: null }
@@ -347,6 +379,12 @@ async function handleRoute(request, { params }) {
           { email: { $regex: search, $options: 'i' } },
           { mobile_phone: { $regex: search } },
         ]
+      }
+      const hiddenIds = await hiddenEventIds(db, user)
+      if (eventId) {
+        q.event_id = hiddenIds.includes(eventId) ? '__none__' : eventId
+      } else {
+        applyHiddenEvents(q, hiddenIds)
       }
       const cursor = db.collection('leads').find(q).sort({ created_at: sort === 'oldest' ? 1 : -1 }).limit(500)
       const list = (await cursor.toArray()).map(stripId)
@@ -410,15 +448,17 @@ async function handleRoute(request, { params }) {
     if (leadMatch) {
       const id = leadMatch[1]
       const { user, error } = await requireAuth(request); if (error) return error
+      const hiddenIds = await hiddenEventIds(db, user)
+      const isHidden = (lead) => lead && hiddenIds.includes(lead.event_id)
       if (method === 'GET') {
         const lead = await db.collection('leads').findOne({ id })
-        if (!lead) return err('Not found', 404)
+        if (!lead || isHidden(lead)) return err('Not found', 404)
         return json({ lead: stripId(lead) })
       }
       if (method === 'PUT') {
         const body = await request.json()
         const existing = await db.collection('leads').findOne({ id })
-        if (!existing) return err('Not found', 404)
+        if (!existing || isHidden(existing)) return err('Not found', 404)
         // Staff can only edit leads they created
         if (user.role !== 'admin' && existing.captured_by !== user.id) return err('Forbidden', 403)
         const allowed = [
@@ -439,6 +479,8 @@ async function handleRoute(request, { params }) {
       if (method === 'DELETE') {
         // Admin: archive
         if (user.role !== 'admin') return err('Admin only', 403)
+        const existing = await db.collection('leads').findOne({ id })
+        if (!existing || isHidden(existing)) return err('Not found', 404)
         await db.collection('leads').updateOne({ id }, { $set: { archived_at: new Date(), updated_at: new Date() } })
         return json({ ok: true })
       }
@@ -447,15 +489,16 @@ async function handleRoute(request, { params }) {
     // ---------- Dashboard stats ----------
     if (route === '/stats' && method === 'GET') {
       const { user, error } = await requireAuth(request); if (error) return error
+      const hiddenIds = await hiddenEventIds(db, user)
       const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0)
-      const total = await db.collection('leads').countDocuments({ archived_at: null })
-      const today = await db.collection('leads').countDocuments({ archived_at: null, created_at: { $gte: startOfDay } })
-      const hot = await db.collection('leads').countDocuments({ archived_at: null, priority: 'Hot' })
+      const total = await db.collection('leads').countDocuments(applyHiddenEvents({ archived_at: null }, hiddenIds))
+      const today = await db.collection('leads').countDocuments(applyHiddenEvents({ archived_at: null, created_at: { $gte: startOfDay } }, hiddenIds))
+      const hot = await db.collection('leads').countDocuments(applyHiddenEvents({ archived_at: null, priority: 'Hot' }, hiddenIds))
       const todayStr = new Date().toISOString().slice(0, 10)
-      const followUps = await db.collection('leads').countDocuments({
+      const followUps = await db.collection('leads').countDocuments(applyHiddenEvents({
         archived_at: null, follow_up_required: true, follow_up_date: { $lte: todayStr, $ne: '' },
-      })
-      const recent = await db.collection('leads').find({ archived_at: null }).sort({ created_at: -1 }).limit(5).toArray()
+      }, hiddenIds))
+      const recent = await db.collection('leads').find(applyHiddenEvents({ archived_at: null }, hiddenIds)).sort({ created_at: -1 }).limit(5).toArray()
       return json({ total, today, hot, followUps, recent: recent.map(stripId) })
     }
 

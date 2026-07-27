@@ -729,17 +729,21 @@ function LeadsList({ setView }) {
   const [priority, setPriority] = useState('')
   const [status, setStatus] = useState('')
   const [followUp, setFollowUp] = useState('')
+  const [eventId, setEventId] = useState('')
+  const [events, setEvents] = useState([])
   const [sort, setSort] = useState('newest')
+
+  useEffect(() => { (async () => { try { const { events } = await api('/events/list'); setEvents(events) } catch { /* ignore */ } })() }, [])
 
   useEffect(() => {
     const t = setTimeout(load, 250)
     return () => clearTimeout(t)
-  }, [search, priority, status, followUp, sort])
+  }, [search, priority, status, followUp, eventId, sort])
 
   async function load() {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ search, priority, status, follow_up: followUp, sort })
+      const params = new URLSearchParams({ search, priority, status, follow_up: followUp, event_id: eventId, sort })
       const { leads } = await api(`/leads?${params.toString()}`)
       setLeads(leads)
     } catch (e) { toast.error(e.message) } finally { setLoading(false) }
@@ -787,6 +791,13 @@ function LeadsList({ setView }) {
           <SelectContent>
             <SelectItem value="newest">Newest First</SelectItem>
             <SelectItem value="oldest">Oldest First</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={eventId || 'ALL'} onValueChange={(v) => setEventId(v === 'ALL' ? '' : v)}>
+          <SelectTrigger className="col-span-2"><SelectValue placeholder="Event" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Events</SelectItem>
+            {events.map((ev) => <SelectItem key={ev.id} value={ev.id}>{ev.name}{ev.active ? ' (Active)' : ''}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
@@ -1020,15 +1031,29 @@ function formatEventDates(ev) {
 }
 
 function DateRangeField({ startDate, endDate, onChange, disabled }) {
-  const range = {
-    from: startDate ? parseISO(startDate) : undefined,
-    to: endDate ? parseISO(endDate) : undefined,
-  }
-  function handleSelect(r) {
-    onChange({
-      start_date: r?.from ? format(r.from, 'yyyy-MM-dd') : '',
-      end_date: r?.to ? format(r.to, 'yyyy-MM-dd') : (r?.from ? format(r.from, 'yyyy-MM-dd') : ''),
-    })
+  // react-day-picker's built-in range mode treats every click as already a
+  // "complete" range (from === to on the very first click) and then always
+  // extends the original anchor point on later clicks — so the start date
+  // can never change via forward clicks once one is set. Rather than fight
+  // that merged proposal, drive selection manually from the raw clicked day
+  // (onDayClick) with a simple two-click state machine: first click starts
+  // a fresh pick, second click completes it, any click after a completed
+  // range starts a new pick again.
+  const [pendingStart, setPendingStart] = useState(null)
+
+  const range = pendingStart
+    ? { from: pendingStart, to: undefined }
+    : { from: startDate ? parseISO(startDate) : undefined, to: endDate ? parseISO(endDate) : undefined }
+
+  function handleDayClick(day) {
+    if (!pendingStart) {
+      setPendingStart(day)
+      onChange({ start_date: format(day, 'yyyy-MM-dd'), end_date: '' })
+    } else {
+      const [lo, hi] = day < pendingStart ? [day, pendingStart] : [pendingStart, day]
+      setPendingStart(null)
+      onChange({ start_date: format(lo, 'yyyy-MM-dd'), end_date: format(hi, 'yyyy-MM-dd') })
+    }
   }
   const label = startDate
     ? (endDate && endDate !== startDate
@@ -1043,13 +1068,19 @@ function DateRangeField({ startDate, endDate, onChange, disabled }) {
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
-        <Calendar mode="range" selected={range} onSelect={handleSelect} numberOfMonths={1} />
+        <Calendar
+          key={`${startDate || ''}_${endDate || ''}_${pendingStart ? format(pendingStart, 'yyyy-MM-dd') : ''}`}
+          mode="range"
+          selected={range}
+          onDayClick={handleDayClick}
+          numberOfMonths={1}
+        />
       </PopoverContent>
     </Popover>
   )
 }
 
-const EMPTY_EVENT_FORM = { name: '', venue: '', start_date: '', end_date: '', booth_number: '' }
+const EMPTY_EVENT_FORM = { name: '', venue: '', start_date: '', end_date: '', booth_number: '', is_test: false }
 
 function EventsManager() {
   const [events, setEvents] = useState(null)
@@ -1092,7 +1123,7 @@ function EventsManager() {
 
   function openEdit(ev) {
     setEditing(ev)
-    setEditForm({ name: ev.name || '', venue: ev.venue || '', start_date: ev.start_date || '', end_date: ev.end_date || '', booth_number: ev.booth_number || '' })
+    setEditForm({ name: ev.name || '', venue: ev.venue || '', start_date: ev.start_date || '', end_date: ev.end_date || '', booth_number: ev.booth_number || '', is_test: !!ev.is_test })
   }
 
   async function saveEdit() {
@@ -1117,6 +1148,7 @@ function EventsManager() {
               <div className="font-medium flex items-center gap-2">
                 {ev.name}
                 {ev.active && <Badge className="bg-green-500 hover:bg-green-500">Active</Badge>}
+                {ev.is_test && <Badge variant="outline" className="border-amber-400 text-amber-700">Test</Badge>}
               </div>
               <div className="text-xs text-slate-500">{ev.venue}{formatEventDates(ev) ? ` · ${formatEventDates(ev)}` : ''}</div>
             </div>
@@ -1144,6 +1176,10 @@ function EventsManager() {
             </div>
             <Input placeholder="Booth Number" value={form.booth_number} onChange={(e) => setForm({ ...form, booth_number: e.target.value })} className="col-span-2" />
           </div>
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <Checkbox checked={form.is_test} onCheckedChange={(v) => setForm({ ...form, is_test: !!v })} />
+            This is a test / demo event — leads captured under it will be hidden from staff and other admins
+          </label>
           <Button onClick={create} disabled={creating} className="bg-slate-900 hover:bg-slate-800">
             {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4 mr-1" />Create Event</>}
           </Button>
@@ -1164,6 +1200,10 @@ function EventsManager() {
               />
             </Field>
             <Field label="Booth Number"><Input value={editForm.booth_number} onChange={(e) => setEditForm({ ...editForm, booth_number: e.target.value })} /></Field>
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <Checkbox checked={editForm.is_test} onCheckedChange={(v) => setEditForm({ ...editForm, is_test: !!v })} />
+              This is a test / demo event — leads captured under it will be hidden from staff and other admins
+            </label>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>

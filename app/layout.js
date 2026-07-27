@@ -35,7 +35,16 @@ export default function RootLayout({ children }) {
         <script dangerouslySetInnerHTML={{__html:`
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js').then((reg) => { reg.update().catch(() => {}); }).catch(() => {});
+  });
+  // Without this, a new service worker can finish installing and take
+  // control in the background, but the already-open tab keeps running the
+  // old page forever since nothing tells it to reload.
+  let refreshedOnce = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshedOnce) return;
+    refreshedOnce = true;
+    window.location.reload();
   });
 }
 window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);
